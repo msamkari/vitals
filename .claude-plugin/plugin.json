@@ -1,0 +1,13 @@
+{
+  "name": "project-inventory",
+  "version": "0.1.0",
+  "description": "Deterministic, offline continuity check for any project: required files, folder contracts, fact expiry, state files fresher than work, and drift between a derived file and its sources. Config-driven, read-only.",
+  "license": "MIT",
+  "homepage": "https://github.com/msamkari/project-inventory",
+  "repository": "https://github.com/msamkari/project-inventory",
+  "keywords": ["inventory", "continuity", "project-health", "state-check"],
+  "author": {
+    "name": "Mohammad Samkari",
+    "url": "https://github.com/msamkari"
+  }
+}

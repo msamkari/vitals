@@ -1,0 +1,9 @@
+{
+  "required_files": ["README.md", "docs/HANDOVER.md", "logs/state.json"],
+  "items": {"glob": "items/*", "require": ["facts.json", "draft_v*.md"], "manifest": "logs/state.json"},
+  "facts_files": "items/*/facts.json",
+  "facts_soon_days": 5,
+  "state_fresh": {"state": ["docs/HANDOVER.md", "logs/state.json"], "work": ["logs/work_log.md", "items/*/draft_v*.md"], "grace_minutes": 5},
+  "newest_age": [{"glob": "reports/*.md", "max_days": 7, "label": "weekly report recent"}],
+  "sync": [{"target": "docs/derived_summary.md", "sources": ["docs/source_a.md"], "label": "derived summary drift"}]
+}

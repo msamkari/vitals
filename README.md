@@ -5,7 +5,7 @@
 A Claude Code plugin that runs a **deterministic, offline continuity check** on any project folder: are the required files there, does every item folder follow its contract, are recorded facts still valid, are the state files at least as fresh as the work, and has a derived file drifted from its sources.
 
 - No network. No dependencies (Python 3.8+ standard library only).
-- Read-only (writes a report only if you pass `--report`).
+- Read-only by default: it writes only the optional `--report` file, and a new starter config when you explicitly run `--init --write`.
 - Configured per project with one JSON file, so nothing is copied between projects.
 
 Arabic: [README.ar.md](README.ar.md)
@@ -25,7 +25,7 @@ Then ask Claude: "run vitals" (skill `vitals`).
 python -X utf8 scripts/vitals.py <project_root> [--config FILE] [--report FILE]
 ```
 
-Exit code: `0` no FAIL, `2` at least one FAIL, `1` tool error (config missing or invalid, bad arguments). WARN never fails. `--today` affects fact expiry only. Use `python3` where `python` is not available. `facts_files` is a single glob string.
+Exit code: `0` no FAIL, `2` at least one FAIL, `1` tool error (config missing or invalid, bad arguments; with `--init`: config already exists, root not found, nothing recognizable, write failed). WARN never fails. `--today` affects fact expiry only. Use `python3` where `python` is not available. `facts_files` is a single glob string.
 
 ## Start without a config
 
@@ -53,7 +53,7 @@ Fix findings by updating the stale files, never by editing the config to hide th
 
 ## Safety
 
-Never executes project files, never opens network connections, never writes anything except the optional `--report` file, and stores no credentials. Config paths are trusted input: use relative paths inside the project root.
+Never executes project files, never opens network connections, never writes anything except the optional `--report` file and, on explicit `--init --write`, a new config file that it never overwrites. It stores no credentials. Config paths are trusted input: use relative paths inside the project root.
 
 ## Tests
 

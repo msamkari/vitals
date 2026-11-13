@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """vitals.py <project_root> [--config FILE] [--report FILE] [--today YYYY-MM-DD]
 
-Deterministic, offline continuity check for any project. No network, no writes
-(except --report). Default config: <root>/Jobs/inventory.config.json
+Deterministic, offline continuity check for any project. No network. Writes only the
+optional --report file and, on explicit request, a new Jobs/inventory.config.json (--init --write). Default config: <root>/Jobs/inventory.config.json
 
 Config keys (all optional):
   required_files   list of paths that must exist
@@ -18,7 +18,8 @@ Starter config: `vitals.py <root> --init` prints a proposal from files that exis
 Jobs/inventory.config.json (never overwrites).
 
 Output: [PASS|WARN|FAIL] name: evidence. Exit code 0 = no FAIL, 2 = at least one FAIL,
-1 = tool error (config missing/invalid, bad arguments). WARN never changes the exit code.
+1 = tool error (config missing/invalid, bad arguments; with --init: config already exists,
+root not found, nothing recognizable, or write failed). WARN never changes the exit code.
 --today affects fact expiry only; newest_age always uses the current time.
 Config paths are trusted input: use relative paths inside the project root.
 """
@@ -163,19 +164,29 @@ def detect_config(root):
 def init_config(root, write=False):
     """Return (exit_code, message). Never overwrites an existing config."""
     R = os.path.abspath(root)
+    if not os.path.isdir(R):
+        return 1, "root not found: %s" % R
     target = os.path.join(R, DEFAULT_CONFIG)
     cfg = detect_config(R)
     if not cfg["required_files"] and "state_fresh" not in cfg:
         return 1, "nothing recognizable found in %s; copy examples/inventory.config.example.json instead" % R
     text = json.dumps(cfg, indent=2, ensure_ascii=False) + "\n"
-    if os.path.exists(target):
-        return 1, "config already exists: %s (not overwritten)" % target
+    if os.path.lexists(target):
+        what = "config already exists" if os.path.isfile(target) else "path exists and is not a regular file"
+        return 1, "%s: %s (not overwritten)" % (what, target)
+    note = ("Note: state_fresh makes the first run FAIL if your work files are newer than your state files; "
+            "that is the check doing its job (update the state files, never the config).")
     if not write:
-        return 0, "# proposed %s (nothing written; add --write to create it)\n%s" % (DEFAULT_CONFIG, text)
-    os.makedirs(os.path.dirname(target), exist_ok=True)
-    with open(target, "w", encoding="utf-8", newline="\n") as fh:
-        fh.write(text)
-    return 0, "created %s\n%s" % (target, text)
+        return 0, "# proposed %s (nothing written; add --write to create it)\n%s%s" % (DEFAULT_CONFIG, text, note if "state_fresh" in cfg else "")
+    try:
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "x", encoding="utf-8", newline="\n") as fh:  # "x": fails if it appeared meanwhile
+            fh.write(text)
+    except FileExistsError:
+        return 1, "config already exists: %s (not overwritten)" % target
+    except OSError as e:
+        return 1, "could not write %s: %s" % (target, e)
+    return 0, "created %s\n%s%s" % (target, text, note if "state_fresh" in cfg else "")
 
 
 def main(argv=None):
@@ -195,6 +206,8 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.write and not a.init:
         ap.error("--write only works with --init")
+    if a.init and (a.config or a.report):
+        ap.error("--init cannot be combined with --config or --report")
     if a.init:
         code, msg = init_config(a.root, a.write)
         print(msg, file=sys.stderr if code else sys.stdout)

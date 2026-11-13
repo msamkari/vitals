@@ -59,6 +59,8 @@ class T(unittest.TestCase):
             lines, fails, warns = pi.run(r, today=today)
             self.assertEqual(fails, 1)
             self.assertTrue(any("old expired" in l for l in lines))
+            self.assertTrue(any("soon ->" in l for l in lines))
+            self.assertEqual(warns, 0)
 
     def test_state_fresher_than_work(self):
         with tempfile.TemporaryDirectory() as r:
@@ -76,7 +78,7 @@ class T(unittest.TestCase):
     def test_sync_drift_warns_only(self):
         with tempfile.TemporaryDirectory() as r:
             t = w(r, "t.md")
-            src = w(r, "s.md")
+            w(r, "s.md")
             os.utime(t, (time.time() - 600, time.time() - 600))
             cfg(r, {"sync": [{"target": "t.md", "sources": ["s.md"], "label": "drift"}]})
             lines, fails, warns = pi.run(r)
@@ -84,14 +86,47 @@ class T(unittest.TestCase):
 
     def test_cli_exit_codes_and_missing_config(self):
         with tempfile.TemporaryDirectory() as r:
-            p = subprocess.run([sys.executable, "-X", "utf8", SCRIPT, r], capture_output=True, text=True)
+            p = subprocess.run([sys.executable, "-X", "utf8", SCRIPT, r], capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(p.returncode, 1)
+            self.assertIn("config not found", p.stderr)
             cfg(r, {"required_files": ["nope"]})
             p = subprocess.run([sys.executable, "-X", "utf8", SCRIPT, r], capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(p.returncode, 2)
             cfg(r, {"required_files": []})
             p = subprocess.run([sys.executable, "-X", "utf8", SCRIPT, r], capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(p.returncode, 0)
+
+    def test_skips_are_warnings_not_silent_passes(self):
+        with tempfile.TemporaryDirectory() as r:
+            cfg(r, {"items": {"glob": "none/*"}, "state_fresh": {"state": ["a"], "work": ["b"]}})
+            _, fails, warns = pi.run(r)
+            self.assertEqual((fails, warns), (0, 2))
+
+    def test_newest_age_and_manifest_warn(self):
+        with tempfile.TemporaryDirectory() as r:
+            old = w(r, "rep/a.md")
+            os.utime(old, (time.time() - 20 * 86400, time.time() - 20 * 86400))
+            w(r, "items/one/x.md")
+            w(r, "m.json", "{}")
+            cfg(r, {"newest_age": [{"glob": "rep/*.md", "max_days": 7, "label": "rep"}],
+                    "items": {"glob": "items/*", "require": ["x.md"], "manifest": "m.json"}})
+            _, fails, warns = pi.run(r)
+            self.assertEqual((fails, warns), (0, 2))
+
+    def test_report_config_and_errors(self):
+        def cli(*args):
+            return subprocess.run([sys.executable, "-X", "utf8", SCRIPT] + list(args), capture_output=True, text=True, encoding="utf-8")
+        with tempfile.TemporaryDirectory() as r:
+            w(r, "a.md")
+            alt = w(r, "alt.json", json.dumps({"required_files": ["a.md"]}))
+            rep = os.path.join(r, "out.txt")
+            self.assertEqual(cli(r, "--config", alt, "--report", rep, "--today", "2026-01-01").returncode, 0)
+            self.assertTrue(os.path.isfile(rep))
+            bad = w(r, "bad.json", "{not json")
+            p = cli(r, "--config", bad)
+            self.assertEqual(p.returncode, 1)
+            self.assertIn("invalid config", p.stderr)
+            self.assertEqual(cli(r, "--config", alt, "--today", "nope").returncode, 1)
 
     def test_arabic_paths_and_example_config_parses(self):
         with tempfile.TemporaryDirectory() as r:

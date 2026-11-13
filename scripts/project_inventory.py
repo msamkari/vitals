@@ -14,8 +14,10 @@ Config keys (all optional):
   newest_age       [{"glob": "...", "max_days": 10, "label": "..."}]
   sync             [{"target": "file", "sources": ["file", ...], "label": "..."}]
 
-Output: [PASS|WARN|FAIL] name: evidence. Exit code 0 = no FAIL, 2 = at least one FAIL.
-WARN never changes the exit code.
+Output: [PASS|WARN|FAIL] name: evidence. Exit code 0 = no FAIL, 2 = at least one FAIL,
+1 = tool error (config missing/invalid, bad arguments). WARN never changes the exit code.
+--today affects fact expiry only; newest_age always uses the current time.
+Config paths are trusted input: use relative paths inside the project root.
 """
 import argparse
 import datetime as dt
@@ -43,7 +45,7 @@ def run(root, config_path=None, today=None):
         out.append((level, name, ev))
 
     def g(p):
-        return glob.glob(os.path.join(R, p), recursive=True)
+        return glob.glob(os.path.join(glob.escape(R), p), recursive=True)
 
     def mt(p):
         return os.path.getmtime(p)
@@ -58,7 +60,10 @@ def run(root, config_path=None, today=None):
         if ep.get("manifest") and os.path.isfile(mp):
             with open(mp, encoding="utf-8") as fh:
                 man = fh.read()
-        for d in sorted(x for x in g(ep["glob"]) if os.path.isdir(x) and not os.path.basename(x).startswith("_")):
+        dirs = sorted(x for x in g(ep["glob"]) if os.path.isdir(x) and not os.path.basename(x).startswith("_"))
+        if not dirs:
+            add("WARN", "items " + ep["glob"], "no matching folders")
+        for d in dirs:
             n = os.path.basename(d)
             miss = [r for r in ep.get("require", []) if not glob.glob(os.path.join(d, r))]
             add("PASS" if not miss else "FAIL", "item " + n, ("missing: " + ", ".join(miss)) if miss else "files ok")
@@ -92,7 +97,7 @@ def run(root, config_path=None, today=None):
     sf = cfg.get("state_fresh")
     if sf:
         state = [os.path.join(R, s) for s in sf["state"] if os.path.isfile(os.path.join(R, s))]
-        work = [w for p in sf["work"] for w in g(p) if os.path.isfile(w) and "_archive" not in w.lower()]
+        work = [w for p in sf["work"] for w in g(p) if os.path.isfile(w) and "_archive" not in os.path.relpath(w, R).lower()]
         if state and work:
             oldest_state = min(mt(s) for s in state)
             newest = max(work, key=mt)
@@ -100,6 +105,8 @@ def run(root, config_path=None, today=None):
             ok = gap <= sf.get("grace_minutes", 5)
             add("PASS" if ok else "FAIL", "state files fresher than work",
                 "ok" if gap <= 0 else "newest work %s is %.0f min after oldest state file" % (os.path.relpath(newest, R), gap))
+        else:
+            add("WARN", "state files fresher than work", "skipped: no state files or no work files found")
 
     for n in cfg.get("newest_age", []):
         fs = g(n["glob"])
@@ -127,7 +134,13 @@ def run(root, config_path=None, today=None):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Offline project continuity check")
+    class _Parser(argparse.ArgumentParser):
+        def error(self, message):  # usage errors exit 1: exit code 2 is reserved for FAIL findings
+            self.print_usage(sys.stderr)
+            print("error: " + message, file=sys.stderr)
+            sys.exit(1)
+
+    ap = _Parser(description="Offline project continuity check")
     ap.add_argument("root")
     ap.add_argument("--config")
     ap.add_argument("--report")
@@ -137,6 +150,9 @@ def main(argv=None):
         lines, fails, _ = run(a.root, a.config, dt.date.fromisoformat(a.today))
     except FileNotFoundError as e:
         print("config not found: %s (create Jobs/inventory.config.json, see examples/)" % e.filename, file=sys.stderr)
+        return 1
+    except (ValueError, KeyError, TypeError, AttributeError) as e:
+        print("invalid config or data (%s: %s)" % (type(e).__name__, e), file=sys.stderr)
         return 1
     txt = "\n".join(lines)
     print(txt)

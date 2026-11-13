@@ -23,7 +23,7 @@ Then ask Claude: "run the project inventory" (skill `project-inventory`).
 python -X utf8 scripts/project_inventory.py <project_root> [--config FILE] [--report FILE]
 ```
 
-Exit code: `0` no FAIL, `2` at least one FAIL, `1` config not found. WARN never fails.
+Exit code: `0` no FAIL, `2` at least one FAIL, `1` tool error (config missing or invalid, bad arguments). WARN never fails. `--today` affects fact expiry only. Use `python3` where `python` is not available. `facts_files` is a single glob string.
 
 ## Config (`<root>/Jobs/inventory.config.json`)
 
@@ -42,7 +42,7 @@ Fix findings by updating the stale files, never by editing the config to hide th
 
 ## Safety
 
-Reads only inside the project root you give it, plus its own config. It never executes project files, never opens network connections and stores no credentials.
+Never executes project files, never opens network connections, never writes anything except the optional `--report` file, and stores no credentials. Config paths are trusted input: use relative paths inside the project root.
 
 ## Tests
 

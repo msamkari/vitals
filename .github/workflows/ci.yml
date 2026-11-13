@@ -1,0 +1,51 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.8", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Manifest is valid JSON with required fields
+        run: python -c "import json;d=json.load(open('.claude-plugin/plugin.json',encoding='utf-8'));assert d['name'] and d['version'] and d['license']=='MIT'"
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Personal paths, emails and key-like strings (files + history)
+        run: |
+          PATTERN='C:\\Users|C:\\\\Users|C:/Users|[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z]{2,}|(^|[^A-Za-z0-9])(sk-|ghp_|github_pat_|AIza|xox[bp]-|AKIA)[A-Za-z0-9_-]{16,}'
+          set +e
+          for c in $(git rev-list --all); do
+            git grep -nIE "$PATTERN" "$c" -- . ':!.github'
+            rc=$?
+            if [ $rc -eq 0 ]; then echo "personal data or key-like string in $c"; exit 1; fi
+            if [ $rc -ne 1 ]; then echo "git grep error rc=$rc"; exit 1; fi
+          done
+          echo clean
+      - name: Dependencies note
+        run: echo "stdlib only; no third-party dependencies to license-check"
+  links:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: lycheeverse/lychee-action@v2
+        with:
+          args: --no-progress --offline README.md README.ar.md

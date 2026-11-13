@@ -1,7 +1,7 @@
 {
   "name": "vitals",
   "version": "0.2.0",
-  "description": "Deterministic, offline continuity check for any project: required files, folder contracts, fact expiry, state files fresher than work, and drift between a derived file and its sources. Config-driven, read-only.",
+  "description": "Deterministic, offline continuity check for any project: required files, folder contracts, fact expiry, state files fresher than work, and drift between a derived file and its sources. Config-driven; read-only unless you ask it to write a starter config.",
   "license": "MIT",
   "homepage": "https://github.com/msamkari/vitals",
   "repository": "https://github.com/msamkari/vitals",

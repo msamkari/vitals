@@ -27,6 +27,15 @@ python -X utf8 scripts/vitals.py <project_root> [--config FILE] [--report FILE]
 
 Exit code: `0` no FAIL, `2` at least one FAIL, `1` tool error (config missing or invalid, bad arguments). WARN never fails. `--today` affects fact expiry only. Use `python3` where `python` is not available. `facts_files` is a single glob string.
 
+## Start without a config
+
+```
+python -X utf8 scripts/vitals.py <project_root> --init          # prints a proposal, writes nothing
+python -X utf8 scripts/vitals.py <project_root> --init --write  # creates Jobs/inventory.config.json (never overwrites)
+```
+
+`--init` only looks at which well-known files exist (CLAUDE.md, README.md, HANDOVER, Jobs state/log files); it never reads their contents. Item folders, facts and sync rules are project-specific: add them by hand.
+
 ## Config (`<root>/Jobs/inventory.config.json`)
 
 See [examples/inventory.config.example.json](examples/inventory.config.example.json).

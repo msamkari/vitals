@@ -22,6 +22,11 @@ def w(root, rel, text="x"):
     return p
 
 
+def slurp(p):
+    with open(p, encoding="utf-8") as fh:
+        return fh.read()
+
+
 def cfg(root, d):
     w(root, "Jobs/inventory.config.json", json.dumps(d))
 
@@ -127,6 +132,45 @@ class T(unittest.TestCase):
             self.assertEqual(p.returncode, 1)
             self.assertIn("invalid config", p.stderr)
             self.assertEqual(cli(r, "--config", alt, "--today", "nope").returncode, 1)
+
+    def test_init_proposes_then_writes_never_overwrites(self):
+        def cli(*args):
+            return subprocess.run([sys.executable, "-X", "utf8", SCRIPT] + list(args), capture_output=True, text=True, encoding="utf-8")
+        with tempfile.TemporaryDirectory() as r:
+            w(r, "CLAUDE.md")
+            w(r, "MDs/HANDOVER.md")
+            w(r, "Jobs/series_log.md")
+            p = cli(r, "--init")
+            self.assertEqual(p.returncode, 0)
+            self.assertIn("nothing written", p.stdout)
+            self.assertFalse(os.path.exists(os.path.join(r, "Jobs", "inventory.config.json")))
+            p = cli(r, "--init", "--write")
+            self.assertEqual(p.returncode, 0)
+            with open(os.path.join(r, "Jobs", "inventory.config.json"), encoding="utf-8") as fh:
+                c = json.load(fh)
+            self.assertEqual(c["required_files"], ["CLAUDE.md", "MDs/HANDOVER.md", "Jobs/series_log.md"])
+            self.assertEqual(c["state_fresh"]["state"], ["MDs/HANDOVER.md"])
+            self.assertEqual(cli(r).returncode, 0)  # generated config is valid and passes
+            before = slurp(os.path.join(r, "Jobs", "inventory.config.json"))
+            p = cli(r, "--init", "--write")
+            self.assertEqual(p.returncode, 1)
+            self.assertIn("not overwritten", p.stderr)
+            self.assertEqual(before, slurp(os.path.join(r, "Jobs", "inventory.config.json")))
+
+    def test_init_empty_project_and_write_without_init(self):
+        def cli(*args):
+            return subprocess.run([sys.executable, "-X", "utf8", SCRIPT] + list(args), capture_output=True, text=True, encoding="utf-8")
+        with tempfile.TemporaryDirectory() as r:
+            self.assertEqual(cli(r, "--init", "--write").returncode, 1)
+            self.assertFalse(os.path.exists(os.path.join(r, "Jobs")))
+            self.assertEqual(cli(r, "--write").returncode, 1)
+
+    def test_init_jobs_glob_fallback(self):
+        with tempfile.TemporaryDirectory() as r:
+            w(r, "HANDOVER.md")
+            w(r, "Jobs/2026_notes.md")
+            c = pi.detect_config(r)
+            self.assertEqual(c["state_fresh"]["work"], ["Jobs/*.md"])
 
     def test_arabic_paths_and_example_config_parses(self):
         with tempfile.TemporaryDirectory() as r:

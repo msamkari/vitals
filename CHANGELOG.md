@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.0 (unreleased)
+- New `--init` / `--init --write`: propose or create a starter `Jobs/inventory.config.json` from well-known files that exist. Never reads file contents and never overwrites an existing config.
+- The skill now offers the proposal when a project has no config.
+
 ## 0.1.0 (2026-11-13)
 - Plugin name: vitals (was a private tool called project_inventory).
 - First plugin release, generalized from a private single-file tool.

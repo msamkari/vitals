@@ -27,6 +27,15 @@ python -X utf8 scripts/vitals.py <project_root> [--config FILE] [--report FILE]
 
 رمز الخروج: `0` لا FAIL، `2` على الأقل FAIL، `1` خطأ في الأداة (الإعداد مفقود أو غير صالح أو وسائط خاطئة). WARN لا يفشل.
 
+## البدء بدون إعداد
+
+```
+python -X utf8 scripts/vitals.py <project_root> --init          # يعرض اقتراحاً ولا يكتب
+python -X utf8 scripts/vitals.py <project_root> --init --write  # ينشئ Jobs/inventory.config.json (لا يستبدل ملفاً موجوداً)
+```
+
+يكتفي `--init` بفحص وجود ملفات معروفة (CLAUDE.md وREADME وHANDOVER وملفات Jobs) ولا يقرأ محتواها. مجلدات العناصر والحقائق وقواعد المزامنة خاصة بكل مشروع: أضفها يدوياً.
+
 ## الإعداد (`<root>/Jobs/inventory.config.json`)
 
 انظر [examples/inventory.config.example.json](examples/inventory.config.example.json). المفاتيح: `required_files`، `items` (أو `episodes`)، `facts_files` و`facts_soon_days`، `state_fresh`، `newest_age`، `sync` (شرحها بالجدول في README الإنجليزي).

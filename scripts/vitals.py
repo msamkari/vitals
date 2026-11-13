@@ -14,6 +14,9 @@ Config keys (all optional):
   newest_age       [{"glob": "...", "max_days": 10, "label": "..."}]
   sync             [{"target": "file", "sources": ["file", ...], "label": "..."}]
 
+Starter config: `vitals.py <root> --init` prints a proposal from files that exist; add --write to create
+Jobs/inventory.config.json (never overwrites).
+
 Output: [PASS|WARN|FAIL] name: evidence. Exit code 0 = no FAIL, 2 = at least one FAIL,
 1 = tool error (config missing/invalid, bad arguments). WARN never changes the exit code.
 --today affects fact expiry only; newest_age always uses the current time.
@@ -133,6 +136,48 @@ def run(root, config_path=None, today=None):
     return lines, fails, warns
 
 
+DEFAULT_CONFIG = os.path.join("Jobs", "inventory.config.json")
+_CANDIDATE_REQUIRED = ["CLAUDE.md", "README.md", "MDs/HANDOVER.md", "HANDOVER.md",
+                       "Jobs/state_manifest.json", "Jobs/series_log.md"]
+_CANDIDATE_STATE = ["MDs/HANDOVER.md", "HANDOVER.md", "Jobs/state_manifest.json"]
+_CANDIDATE_WORK = ["Jobs/series_log.md", "CHANGELOG.md"]
+
+
+def detect_config(root):
+    """Propose a starter config from files that already exist. Never reads file contents."""
+    R = os.path.abspath(root)
+
+    def have(rel):
+        return os.path.isfile(os.path.join(R, rel))
+
+    cfg = {"required_files": [f for f in _CANDIDATE_REQUIRED if have(f)]}
+    state = [f for f in _CANDIDATE_STATE if have(f)]
+    work = [f for f in _CANDIDATE_WORK if have(f)]
+    if not work and glob.glob(os.path.join(glob.escape(R), "Jobs", "*.md")):
+        work = ["Jobs/*.md"]
+    if state and work:
+        cfg["state_fresh"] = {"state": state, "work": work, "grace_minutes": 5}
+    return cfg
+
+
+def init_config(root, write=False):
+    """Return (exit_code, message). Never overwrites an existing config."""
+    R = os.path.abspath(root)
+    target = os.path.join(R, DEFAULT_CONFIG)
+    cfg = detect_config(R)
+    if not cfg["required_files"] and "state_fresh" not in cfg:
+        return 1, "nothing recognizable found in %s; copy examples/inventory.config.example.json instead" % R
+    text = json.dumps(cfg, indent=2, ensure_ascii=False) + "\n"
+    if os.path.exists(target):
+        return 1, "config already exists: %s (not overwritten)" % target
+    if not write:
+        return 0, "# proposed %s (nothing written; add --write to create it)\n%s" % (DEFAULT_CONFIG, text)
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    with open(target, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(text)
+    return 0, "created %s\n%s" % (target, text)
+
+
 def main(argv=None):
     class _Parser(argparse.ArgumentParser):
         def error(self, message):  # usage errors exit 1: exit code 2 is reserved for FAIL findings
@@ -145,7 +190,15 @@ def main(argv=None):
     ap.add_argument("--config")
     ap.add_argument("--report")
     ap.add_argument("--today", default=dt.date.today().isoformat())
+    ap.add_argument("--init", action="store_true", help="propose a starter config from existing files (prints only)")
+    ap.add_argument("--write", action="store_true", help="with --init: create Jobs/inventory.config.json (never overwrites)")
     a = ap.parse_args(argv)
+    if a.write and not a.init:
+        ap.error("--write only works with --init")
+    if a.init:
+        code, msg = init_config(a.root, a.write)
+        print(msg, file=sys.stderr if code else sys.stdout)
+        return code
     try:
         lines, fails, _ = run(a.root, a.config, dt.date.fromisoformat(a.today))
     except FileNotFoundError as e:

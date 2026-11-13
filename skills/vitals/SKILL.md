@@ -5,7 +5,7 @@ description: Run a lightweight, offline continuity check on a project (required 
 
 # vitals
 
-1. Find the project root (the folder that holds `Jobs/inventory.config.json`). If the config is missing, copy `${CLAUDE_PLUGIN_ROOT}/examples/inventory.config.example.json` to `<root>/Jobs/inventory.config.json`, adapt it with the user, and do not run before they agree.
+1. Find the project root. If `<root>/Jobs/inventory.config.json` is missing, propose one: run `python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/vitals.py" "<root>" --init` (prints only), show the proposal to the user, and only after they agree run the same command with `--write` (it never overwrites). Then offer to extend it by hand (item folders, facts, sync rules: see `${CLAUDE_PLUGIN_ROOT}/examples/inventory.config.example.json`).
 2. Run (read-only, offline):
 
 ```

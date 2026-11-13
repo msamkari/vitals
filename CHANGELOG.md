@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 (unreleased)
+## 0.2.0 (2026-11-13)
 - New `--init` / `--init --write`: propose or create a starter `Jobs/inventory.config.json` from well-known files that exist. Never reads file contents and never overwrites an existing config.
 - The skill now offers the proposal when a project has no config.
 - Writes use exclusive creation; write errors, missing roots and `--init` combined with `--config`/`--report` exit 1 with a clear message.

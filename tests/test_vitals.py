@@ -22,6 +22,11 @@ def w(root, rel, text="x"):
     return p
 
 
+def slurp(p):
+    with open(p, encoding="utf-8") as fh:
+        return fh.read()
+
+
 def cfg(root, d):
     w(root, "Jobs/inventory.config.json", json.dumps(d))
 
@@ -127,6 +132,101 @@ class T(unittest.TestCase):
             self.assertEqual(p.returncode, 1)
             self.assertIn("invalid config", p.stderr)
             self.assertEqual(cli(r, "--config", alt, "--today", "nope").returncode, 1)
+
+    def test_init_proposes_then_writes_never_overwrites(self):
+        def cli(*args):
+            return subprocess.run([sys.executable, "-X", "utf8", SCRIPT] + list(args), capture_output=True, text=True, encoding="utf-8")
+        with tempfile.TemporaryDirectory() as r:
+            w(r, "CLAUDE.md")
+            w(r, "MDs/HANDOVER.md")
+            w(r, "Jobs/series_log.md")
+            p = cli(r, "--init")
+            self.assertEqual(p.returncode, 0)
+            self.assertIn("nothing written", p.stdout)
+            self.assertFalse(os.path.exists(os.path.join(r, "Jobs", "inventory.config.json")))
+            p = cli(r, "--init", "--write")
+            self.assertEqual(p.returncode, 0)
+            with open(os.path.join(r, "Jobs", "inventory.config.json"), encoding="utf-8") as fh:
+                c = json.load(fh)
+            self.assertEqual(c["required_files"], ["CLAUDE.md", "MDs/HANDOVER.md", "Jobs/series_log.md"])
+            self.assertEqual(c["state_fresh"]["state"], ["MDs/HANDOVER.md"])
+            self.assertEqual(cli(r).returncode, 0)  # generated config is valid and passes
+            before = slurp(os.path.join(r, "Jobs", "inventory.config.json"))
+            p = cli(r, "--init", "--write")
+            self.assertEqual(p.returncode, 1)
+            self.assertIn("not overwritten", p.stderr)
+            self.assertEqual(before, slurp(os.path.join(r, "Jobs", "inventory.config.json")))
+
+    def test_init_empty_project_and_write_without_init(self):
+        def cli(*args):
+            return subprocess.run([sys.executable, "-X", "utf8", SCRIPT] + list(args), capture_output=True, text=True, encoding="utf-8")
+        with tempfile.TemporaryDirectory() as r:
+            self.assertEqual(cli(r, "--init", "--write").returncode, 1)
+            self.assertFalse(os.path.exists(os.path.join(r, "Jobs")))
+            self.assertEqual(cli(r, "--write").returncode, 1)
+
+    def test_init_jobs_glob_fallback(self):
+        with tempfile.TemporaryDirectory() as r:
+            w(r, "HANDOVER.md")
+            w(r, "Jobs/2026_notes.md")
+            c = pi.detect_config(r)
+            self.assertEqual(c["state_fresh"]["work"], ["Jobs/*.md"])
+
+    def test_init_edge_cases(self):
+        def cli(*args):
+            return subprocess.run([sys.executable, "-X", "utf8", SCRIPT] + list(args), capture_output=True, text=True, encoding="utf-8")
+        with tempfile.TemporaryDirectory() as r:
+            p = cli(os.path.join(r, "nope"), "--init")
+            self.assertEqual(p.returncode, 1)
+            self.assertIn("root not found", p.stderr)
+            w(r, "CLAUDE.md")
+            w(r, "Jobs", "i am a file")  # Jobs is a file, not a folder
+            p = cli(r, "--init", "--write")
+            self.assertEqual(p.returncode, 1)
+            self.assertNotIn("Traceback", p.stderr)
+            self.assertEqual(slurp(os.path.join(r, "Jobs")), "i am a file")
+        with tempfile.TemporaryDirectory() as r:
+            w(r, "CLAUDE.md")
+            os.makedirs(os.path.join(r, "Jobs", "inventory.config.json"))  # target is a directory
+            p = cli(r, "--init")
+            self.assertEqual(p.returncode, 1)
+            self.assertIn("not a regular file", p.stderr)
+            self.assertEqual(cli(r, "--init", "--config", "x.json").returncode, 1)
+            self.assertEqual(cli(r, "--init", "--report", "x.txt").returncode, 1)
+
+    def test_init_existing_config_without_write_exits_1(self):
+        with tempfile.TemporaryDirectory() as r:
+            w(r, "CLAUDE.md")
+            cfg(r, {"required_files": []})
+            code, msg = pi.init_config(r, write=False)
+            self.assertEqual(code, 1)
+            self.assertIn("already exists", msg)
+
+    def test_detect_config_never_opens_files(self):
+        import builtins
+        with tempfile.TemporaryDirectory() as r:
+            w(r, "CLAUDE.md")
+            w(r, "MDs/HANDOVER.md")
+            w(r, "Jobs/series_log.md")
+            real = builtins.open
+
+            def boom(*a, **k):
+                raise AssertionError("open() called during detect_config")
+            builtins.open = boom
+            try:
+                c = pi.detect_config(r)
+            finally:
+                builtins.open = real
+            self.assertIn("state_fresh", c)
+
+    def test_generated_config_fails_when_work_is_newer_than_state(self):
+        with tempfile.TemporaryDirectory() as r:
+            h = w(r, "HANDOVER.md")
+            w(r, "CHANGELOG.md")
+            os.utime(h, (time.time() - 3600, time.time() - 3600))
+            self.assertEqual(pi.init_config(r, write=True)[0], 0)
+            _, fails, _ = pi.run(r)
+            self.assertEqual(fails, 1)
 
     def test_arabic_paths_and_example_config_parses(self):
         with tempfile.TemporaryDirectory() as r:

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""project_inventory.py <project_root> [--config FILE] [--report FILE] [--today YYYY-MM-DD]
+"""vitals.py <project_root> [--config FILE] [--report FILE] [--today YYYY-MM-DD]
 
 Deterministic, offline continuity check for any project. No network, no writes
 (except --report). Default config: <root>/Jobs/inventory.config.json
@@ -128,7 +128,7 @@ def run(root, config_path=None, today=None):
 
     fails = sum(1 for l, _, _ in out if l == "FAIL")
     warns = sum(1 for l, _, _ in out if l == "WARN")
-    head = "# project_inventory %s - %s - FAIL %d / WARN %d / total %d" % (os.path.basename(R), today, fails, warns, len(out))
+    head = "# vitals %s - %s - FAIL %d / WARN %d / total %d" % (os.path.basename(R), today, fails, warns, len(out))
     lines = [head] + ["[%s] %s" % (l, n) + (": " + e if e else "") for l, n, e in out]
     return lines, fails, warns
 

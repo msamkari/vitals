@@ -1,4 +1,6 @@
-# project-inventory
+# vitals
+
+> العلامات الحيوية لمشروعك، بلا شبكة.
 
 إضافة (plugin) لـClaude Code يجري **جرد استمرارية قطعياً وبلا شبكة** لأي مجلد مشروع: هل الملفات المطلوبة موجودة، وهل كل مجلد عنصر يلتزم بعقده، وهل الحقائق المسجلة ما زالت صالحة، وهل ملفات الحالة بحداثة الشغل، وهل ملف مشتق انحرف عن مصادره.
 
@@ -12,15 +14,15 @@ English: [README.md](README.md)
 
 ```
 /plugin marketplace add msamkari/samkari-plugins
-/plugin install project-inventory@samkari-plugins
+/plugin install vitals@samkari-plugins
 ```
 
-ثم اطلب من Claude: «شغّل جرد المشروع».
+ثم اطلب من Claude: «شغّل vitals».
 
 ## بدون Claude
 
 ```
-python -X utf8 scripts/project_inventory.py <project_root> [--config FILE] [--report FILE]
+python -X utf8 scripts/vitals.py <project_root> [--config FILE] [--report FILE]
 ```
 
 رمز الخروج: `0` لا FAIL، `2` على الأقل FAIL، `1` خطأ في الأداة (الإعداد مفقود أو غير صالح أو وسائط خاطئة). WARN لا يفشل.

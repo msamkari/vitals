@@ -9,9 +9,9 @@ import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SCRIPT = os.path.join(HERE, "..", "scripts", "project_inventory.py")
+SCRIPT = os.path.join(HERE, "..", "scripts", "vitals.py")
 sys.path.insert(0, os.path.join(HERE, "..", "scripts"))
-import project_inventory as pi  # noqa: E402
+import vitals as pi  # noqa: E402
 
 
 def w(root, rel, text="x"):

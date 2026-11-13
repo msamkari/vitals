@@ -1,6 +1,7 @@
 # Changelog
 
 ## 0.1.0 (unreleased)
+- Plugin name: vitals (was a private tool called project_inventory).
 - First plugin release, generalized from a private single-file tool.
 - Config key `items` added (legacy `episodes` still accepted); messages in English.
 - Tool errors (missing or invalid config, bad arguments, bad `--today`) exit 1 with a message instead of a traceback; argparse usage errors no longer exit 2.

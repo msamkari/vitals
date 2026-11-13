@@ -1,4 +1,6 @@
-# project-inventory
+# vitals
+
+> Your project's vitals, offline.
 
 A Claude Code plugin that runs a **deterministic, offline continuity check** on any project folder: are the required files there, does every item folder follow its contract, are recorded facts still valid, are the state files at least as fresh as the work, and has a derived file drifted from its sources.
 
@@ -12,15 +14,15 @@ Arabic: [README.ar.md](README.ar.md)
 
 ```
 /plugin marketplace add msamkari/samkari-plugins
-/plugin install project-inventory@samkari-plugins
+/plugin install vitals@samkari-plugins
 ```
 
-Then ask Claude: "run the project inventory" (skill `project-inventory`).
+Then ask Claude: "run vitals" (skill `vitals`).
 
 ## Use without Claude
 
 ```
-python -X utf8 scripts/project_inventory.py <project_root> [--config FILE] [--report FILE]
+python -X utf8 scripts/vitals.py <project_root> [--config FILE] [--report FILE]
 ```
 
 Exit code: `0` no FAIL, `2` at least one FAIL, `1` tool error (config missing or invalid, bad arguments). WARN never fails. `--today` affects fact expiry only. Use `python3` where `python` is not available. `facts_files` is a single glob string.

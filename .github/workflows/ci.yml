@@ -49,3 +49,22 @@ jobs:
       - uses: lycheeverse/lychee-action@v2
         with:
           args: --no-progress --offline README.md README.ar.md
+
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: License is permissive and matches the LICENSE file
+        run: |
+          lic=$(node -p "require('./.claude-plugin/plugin.json').license")
+          case "$lic" in MIT) pat='MIT License';; Apache-2.0) pat='Apache License';; BSD-2-Clause|BSD-3-Clause) pat='BSD';; *) echo "license '$lic' needs review"; exit 1;; esac
+          grep -qi "$pat" LICENSE || { echo "LICENSE does not look like $lic"; exit 1; }
+      - name: No third-party dependencies to license-check
+        run: |
+          for f in package.json requirements.txt pyproject.toml; do
+            if [ -f "$f" ]; then echo "$f present: review dependency licenses first"; exit 1; fi
+          done
+      - name: claude plugin validate
+        run: npx -y @anthropic-ai/claude-code@2.1.316 plugin validate .

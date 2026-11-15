@@ -24,7 +24,8 @@ class BreakTests(unittest.TestCase):
         self.assertEqual(fails, 0)
 
     def test_paths_outside_root_fail_and_are_not_read(self):
-        d = mk({"required_files": ["../x.txt", "C:/Windows/win.ini"]})
+        other = tempfile.mkdtemp()
+        d = mk({"required_files": ["../x.txt", other.replace(os.sep, "/")]})
         lines, fails, _ = vitals.run(d)
         self.assertEqual(fails, 2)
         self.assertTrue(all("outside the project root" in l for l in lines[1:]))

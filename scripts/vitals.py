@@ -21,14 +21,16 @@ Output: [PASS|WARN|FAIL] name: evidence. Exit code 0 = no FAIL, 2 = at least one
 1 = tool error (config missing/invalid, bad arguments; with --init: config already exists,
 root not found, nothing recognizable, or write failed). WARN never changes the exit code.
 --today affects fact expiry only; newest_age always uses the current time.
-Config paths are trusted input: use relative paths inside the project root.
+Config paths must stay inside the project root (anything resolving outside is reported as FAIL and never read). Text read from project files is stripped of control characters and truncated before it is printed. --report refuses to overwrite a file that is not a previous vitals report.
 """
 import argparse
 import datetime as dt
 import glob
 import json
 import os
+import re
 import sys
+import time
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -36,85 +38,144 @@ except Exception:
     pass
 
 
+MAX_FILES = 20000          # per glob: a runaway pattern or a link loop must not hang the run
+MAX_SECONDS = 30           # wall clock for the whole run
+
+
+def clean(s, n=80):
+    """Text that comes from files is data: strip control characters and cap the length before it is printed."""
+    s = re.sub(r"[\x00-\x1f\x7f]+", " ", str(s))
+    return s if len(s) <= n else s[: n - 1] + "..."
+
+
 def run(root, config_path=None, today=None):
     """Return (lines, fails, warns) for a project root."""
     R = os.path.abspath(root)
     today = today or dt.date.today()
     cfg_file = config_path or os.path.join(R, "Jobs", "inventory.config.json")
-    with open(cfg_file, encoding="utf-8") as fh:
+    with open(cfg_file, encoding="utf-8-sig") as fh:   # utf-8-sig: Notepad and Windows PowerShell write a BOM
         cfg = json.load(fh)
+    if not isinstance(cfg, dict):
+        raise TypeError("config must be a JSON object")
     out = []
+    deadline = time.time() + MAX_SECONDS
+    Rr = os.path.realpath(R)
+
+    def inside(p):
+        try:
+            return os.path.commonpath([Rr, os.path.realpath(p)]) == Rr
+        except ValueError:
+            return False
+
+    def J(rel):
+        """Join a config path to the root; None when it would leave the project root."""
+        p = os.path.join(R, rel)
+        return p if inside(p) else None
+
+    def lst(v, key):
+        if v is None:
+            return []
+        if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+            raise TypeError("%s must be a list of strings" % key)
+        return v
 
     def add(level, name, ev=""):
         out.append((level, name, ev))
 
     def g(p):
-        return glob.glob(os.path.join(glob.escape(R), p), recursive=True)
+        if p.count("**") > 2:
+            add("FAIL", "glob " + clean(p), "too many ** segments (limit 2)")
+            return []
+        res = []
+        try:
+            for x in glob.iglob(os.path.join(glob.escape(R), p), recursive=True):
+                if len(res) >= MAX_FILES or time.time() > deadline:
+                    add("FAIL", "glob " + clean(p), "scan limit reached (%d files / %d s); narrow the pattern" % (MAX_FILES, MAX_SECONDS))
+                    break
+                if inside(x):
+                    res.append(x)
+        except OSError as e:
+            add("FAIL", "glob " + clean(p), "cannot scan: %s" % clean(e))
+        return res
 
     def mt(p):
-        return os.path.getmtime(p)
+        try:
+            return os.path.getmtime(p)
+        except OSError:
+            return 0.0
 
-    for f in cfg.get("required_files", []):
-        add("PASS" if os.path.exists(os.path.join(R, f)) else "FAIL", "required: " + f)
+    for f in lst(cfg.get("required_files"), "required_files"):
+        p = J(f)
+        if p is None:
+            add("FAIL", "required: " + clean(f), "outside the project root")
+        else:
+            add("PASS" if os.path.exists(p) else "FAIL", "required: " + clean(f))
 
     ep = cfg.get("items") or cfg.get("episodes")
     if ep:
         man = ""
-        mp = os.path.join(R, ep.get("manifest", ""))
-        if ep.get("manifest") and os.path.isfile(mp):
-            with open(mp, encoding="utf-8") as fh:
+        mp = J(ep.get("manifest", ""))
+        if ep.get("manifest") and mp and os.path.isfile(mp):
+            with open(mp, encoding="utf-8-sig", errors="replace") as fh:
                 man = fh.read()
         dirs = sorted(x for x in g(ep["glob"]) if os.path.isdir(x) and not os.path.basename(x).startswith("_"))
         if not dirs:
             add("WARN", "items " + ep["glob"], "no matching folders")
         for d in dirs:
             n = os.path.basename(d)
-            miss = [r for r in ep.get("require", []) if not glob.glob(os.path.join(d, r))]
-            add("PASS" if not miss else "FAIL", "item " + n, ("missing: " + ", ".join(miss)) if miss else "files ok")
+            miss = [r for r in lst(ep.get("require"), "require") if not glob.glob(os.path.join(glob.escape(d), r))]
+            add("PASS" if not miss else "FAIL", "item " + clean(n), ("missing: " + clean(", ".join(miss))) if miss else "files ok")
             if man:
-                add("PASS" if n in man else "WARN", "manifest mentions " + n)
+                add("PASS" if re.search(r"(?<!\w)" + re.escape(n) + r"(?!\w)", man) else "WARN", "manifest mentions " + clean(n))
 
     ff = cfg.get("facts_files")
     if ff:
         soon = cfg.get("facts_soon_days", 5)
         for f in sorted(g(ff)):
-            rel = os.path.relpath(f, R)
+            rel = clean(os.path.relpath(f, R))
             try:
-                with open(f, encoding="utf-8") as fh:
+                with open(f, encoding="utf-8-sig") as fh:
                     d = json.load(fh)
             except Exception as e:
-                add("FAIL", "facts " + rel, "unreadable: %s" % e)
+                add("FAIL", "facts " + rel, "unreadable: %s" % clean(e))
+                continue
+            if not isinstance(d, dict) or not isinstance(d.get("facts", []), list):
+                add("FAIL", "facts " + rel, 'unexpected shape (expected {"facts": [...]})')
                 continue
             bad, near = [], []
             for x in d.get("facts", []):
+                if not isinstance(x, dict):
+                    bad.append("?(entry?)")
+                    continue
+                fid = clean(x.get("id", "?"), 40)
                 try:
                     exp = dt.date.fromisoformat(x["date_verified"]) + dt.timedelta(days=int(x["expires_after_days"]))
                 except Exception:
-                    bad.append(str(x.get("id", "?")) + "(date?)")
+                    bad.append(fid + "(date?)")
                     continue
                 if exp < today:
-                    bad.append("%s expired %s" % (x.get("id"), exp))
+                    bad.append("%s expired %s" % (fid, exp))
                 elif (exp - today).days <= soon:
-                    near.append("%s -> %s" % (x.get("id"), exp))
+                    near.append("%s -> %s" % (fid, exp))
             add("FAIL" if bad else ("WARN" if near else "PASS"), "facts " + rel, "; ".join(bad + near) or "all valid")
 
     sf = cfg.get("state_fresh")
     if sf:
-        state = [os.path.join(R, s) for s in sf["state"] if os.path.isfile(os.path.join(R, s))]
-        work = [w for p in sf["work"] for w in g(p) if os.path.isfile(w) and "_archive" not in os.path.relpath(w, R).lower()]
+        state = [J(x) for x in lst(sf["state"], "state") if J(x) and os.path.isfile(J(x))]
+        work = [w for p in lst(sf["work"], "work") for w in g(p) if os.path.isfile(w) and "_archive" not in os.path.relpath(w, R).lower()]
         if state and work:
             oldest_state = min(mt(s) for s in state)
             newest = max(work, key=mt)
             gap = (mt(newest) - oldest_state) / 60
             ok = gap <= sf.get("grace_minutes", 5)
             add("PASS" if ok else "FAIL", "state files fresher than work",
-                "ok" if gap <= 0 else "newest work %s is %.0f min after oldest state file" % (os.path.relpath(newest, R), gap))
+                "ok" if gap <= 0 else "newest work %s is %.0f min after oldest state file" % (clean(os.path.relpath(newest, R)), gap))
         else:
             add("WARN", "state files fresher than work", "skipped: no state files or no work files found")
 
     for n in cfg.get("newest_age", []):
         fs = g(n["glob"])
-        label = n.get("label", n["glob"])
+        label = clean(n.get("label", n["glob"]))
         if not fs:
             add("WARN", label, "no files")
             continue
@@ -122,17 +183,17 @@ def run(root, config_path=None, today=None):
         add("PASS" if age <= n["max_days"] else "WARN", label, "newest %.1f d old (max %s)" % (age, n["max_days"]))
 
     for s in cfg.get("sync", []):
-        label = s.get("label", s["target"])
-        t = os.path.join(R, s["target"])
-        if not os.path.isfile(t):
+        label = clean(s.get("label", s["target"]))
+        t = J(s["target"])
+        if not t or not os.path.isfile(t):
             add("WARN", label, "target missing")
             continue
-        newer = [x for x in s["sources"] if os.path.isfile(os.path.join(R, x)) and mt(os.path.join(R, x)) > mt(t) + 60]
-        add("WARN" if newer else "PASS", label, ("sources newer than target: " + ", ".join(newer)) if newer else "in sync")
+        newer = [x for x in lst(s["sources"], "sources") if J(x) and os.path.isfile(J(x)) and mt(J(x)) > mt(t) + 60]
+        add("WARN" if newer else "PASS", label, ("sources newer than target: " + clean(", ".join(newer))) if newer else "in sync")
 
     fails = sum(1 for l, _, _ in out if l == "FAIL")
     warns = sum(1 for l, _, _ in out if l == "WARN")
-    head = "# vitals %s - %s - FAIL %d / WARN %d / total %d" % (os.path.basename(R), today, fails, warns, len(out))
+    head = "# vitals %s - %s - FAIL %d / WARN %d / total %d" % (clean(os.path.basename(R)), today, fails, warns, len(out))
     lines = [head] + ["[%s] %s" % (l, n) + (": " + e if e else "") for l, n, e in out]
     return lines, fails, warns
 
@@ -215,7 +276,11 @@ def main(argv=None):
     try:
         lines, fails, _ = run(a.root, a.config, dt.date.fromisoformat(a.today))
     except FileNotFoundError as e:
-        print("config not found: %s (create Jobs/inventory.config.json, see examples/)" % e.filename, file=sys.stderr)
+        cfgp = os.path.abspath(a.config) if a.config else os.path.join(os.path.abspath(a.root), DEFAULT_CONFIG)
+        if os.path.abspath(str(e.filename)) == cfgp:
+            print("config not found: %s (create Jobs/inventory.config.json, see examples/)" % e.filename, file=sys.stderr)
+        else:
+            print("a file disappeared during the run: %s (run again)" % e.filename, file=sys.stderr)
         return 1
     except (ValueError, KeyError, TypeError, AttributeError) as e:
         print("invalid config or data (%s: %s)" % (type(e).__name__, e), file=sys.stderr)
@@ -223,7 +288,17 @@ def main(argv=None):
     txt = "\n".join(lines)
     print(txt)
     if a.report:
-        with open(a.report, "w", encoding="utf-8") as fh:
+        rp = os.path.abspath(a.report)
+        if os.path.lexists(rp):
+            try:
+                with open(rp, encoding="utf-8-sig") as fh:
+                    first = fh.readline()
+            except (OSError, UnicodeDecodeError):
+                first = ""
+            if not first.startswith("# vitals "):
+                print("refusing to overwrite %s: it is not a previous vitals report (choose a new file name)" % rp, file=sys.stderr)
+                return 1
+        with open(rp, "w", encoding="utf-8") as fh:
             fh.write(txt + "\n")
     return 2 if fails else 0
 

@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.2 (2026-11-15)
+- Added the plugin icon (square PNG, 1024 px), generated with Gemini and chosen by the author; clears the ICON_MISSING validator warning.
+
 ## 0.2.1 (2026-11-15)
 Found by an adversarial test round (22 findings; fixed here):
 - `--report` no longer overwrites a file that is not a previous vitals report (it had replaced the project's config).

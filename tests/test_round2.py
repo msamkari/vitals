@@ -119,6 +119,15 @@ class ConfinementTests(Base):
         self.assertEqual(fails, 0, lines)
 
 
+class LexicalTests(unittest.TestCase):
+    def test_same_verdict_on_every_platform(self):
+        for bad in ("../x", "a/../b", "a\\..\\b", "..", "/etc/passwd", "\\\\host\\share\\f", "//host/share/f", "C:/Windows/win.ini",
+                    "c:rel.txt", "D:\\x", "x\x00y"):
+            self.assertTrue(vitals.lexical_outside(bad), bad)
+        for good in ("a.md", "Items/*", "a/b/c.txt", "**/x", "..a", "x..y", "dir/.hidden", ""):
+            self.assertFalse(vitals.lexical_outside(good), good)
+
+
 class WalkerTests(Base):
     FILES = ["a.md", "b.txt", ".hidden", ".d/x.md", "sub/c.md", "sub/d.txt", "sub/deep/e.md", "sub/.h/f.md",
              "Items/one/facts.json", "Items/two/x", "ab1/x1.md", "ab2/y.md"]
@@ -147,6 +156,20 @@ class WalkerTests(Base):
         self.assertLess(time.time() - t0, 10)
         self.assertEqual(fails, 0, lines)
         self.assertFalse(any("scan limit" in l for l in lines), lines)
+
+    @unittest.skipUnless(os.name == "nt", "directory junctions exist on Windows only")
+    def test_directory_junction_is_detected_and_not_followed(self):
+        d = self.mk({}, {"real/marker.txt": "x"})
+        link = os.path.join(d, "jn")
+        r = subprocess.run(["cmd", "/c", "mklink", "/J", link, os.path.join(d, "real")], capture_output=True)
+        if r.returncode != 0:
+            self.skipTest("mklink /J not available")
+        self.addCleanup(remove_link, link)
+        self.assertTrue(vitals.is_link(link))
+        self.assertTrue(vitals._path_has_link(os.path.join(link, "r.md")))
+        self.assertFalse(vitals.is_link(os.path.join(d, "real")))
+        got = sorted(os.path.relpath(x, d).replace(os.sep, "/") for x in vitals.walk_glob(d, "**/marker.txt", vitals._now() + 60, 10 ** 6))
+        self.assertEqual(got, ["real/marker.txt"])
 
     def test_deadline_is_checked_when_nothing_matches(self):
         d = self.mk({"items": {"glob": "**/zzz_nomatch"}}, {"d%d/f.txt" % i: "x" for i in range(10)})

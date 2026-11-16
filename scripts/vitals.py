@@ -76,7 +76,7 @@ def lexical_outside(rel):
     UNC path never makes the OS contact another machine): absolute, rooted, drive/UNC, '..' segments, NUL."""
     if not isinstance(rel, str):
         raise TypeError("paths in the config must be strings")
-    if "\x00" in rel or rel.startswith(("/", "\\")) or os.path.isabs(rel) or os.path.splitdrive(rel)[0]:
+    if "\x00" in rel or rel.startswith(("/", "\\")) or os.path.isabs(rel) or os.path.splitdrive(rel)[0] or re.match(r"[A-Za-z]:", rel):
         return True
     return ".." in re.split(r"[\\/]+", rel)
 

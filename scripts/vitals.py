@@ -21,16 +21,20 @@ Output: [PASS|WARN|FAIL] name: evidence. Exit code 0 = no FAIL, 2 = at least one
 1 = tool error (config missing/invalid, bad arguments; with --init: config already exists,
 root not found, nothing recognizable, or write failed). WARN never changes the exit code.
 --today affects fact expiry only; newest_age always uses the current time.
-Config paths must stay inside the project root (anything resolving outside is reported as FAIL and never read). Text read from project files is stripped of control characters and truncated before it is printed. --report refuses to overwrite a file that is not a previous vitals report.
+Config paths must stay inside the project root (anything resolving outside is reported as FAIL and never read). Text read from project files is stripped of control characters and truncated before it is printed. --report refuses to overwrite any file that is not exactly a previous vitals report (first line `# vitals `, at most 10000 lines, every line empty or starting with [PASS]/[WARN]/[FAIL]/#), refuses the config file or anything named like it, and refuses a path that goes through a link.
+Globs and require patterns are matched by a bounded walker: symlinks and junctions are never entered, and the entry cap and the 30 s limit apply even when nothing matches. Absolute, UNC, drive and `..` config paths are reported as FAIL (outside the project root) without touching the file system.
 """
 import argparse
 import datetime as dt
+import fnmatch
 import glob
 import json
 import os
 import re
+import stat
 import sys
 import time
+import unicodedata
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -38,14 +42,135 @@ except Exception:
     pass
 
 
-MAX_FILES = 20000          # per glob: a runaway pattern or a link loop must not hang the run
+MAX_FILES = 20000          # per glob: results; entries scanned are capped at MAX_FILES * SCAN_FACTOR
+SCAN_FACTOR = 10
 MAX_SECONDS = 30           # wall clock for the whole run
+REPORT_MAX_LINES = 10000
+REPORT_MAX_LINE_CHARS = 5000
+_REPORT_PREFIXES = ("[PASS]", "[WARN]", "[FAIL]", "#")
+_STRIP_CATEGORIES = ("Cc", "Cf", "Zl", "Zp", "Cs", "Co")
+
+
+def _now():
+    return time.monotonic()
 
 
 def clean(s, n=80):
-    """Text that comes from files is data: strip control characters and cap the length before it is printed."""
-    s = re.sub(r"[\x00-\x1f\x7f]+", " ", str(s))
-    return s if len(s) <= n else s[: n - 1] + "..."
+    """Text that comes from config or files is data: remove every control, format, line/paragraph-separator, surrogate and
+    private-use character (Unicode categories Cc, Cf, Zl, Zp, Cs, Co), collapse whitespace and cap the length before printing.
+    Line breaks and tabs become a single space; every other such character is dropped."""
+    out = []
+    for ch in str(s):
+        cat = unicodedata.category(ch)
+        if cat in _STRIP_CATEGORIES:
+            if ch.isspace() or ch in "\u2028\u2029\x85":
+                out.append(" ")
+            continue
+        out.append(ch)
+    s = " ".join("".join(out).split())
+    return s if len(s) <= n else s[: max(n - 3, 0)] + "..."
+
+
+def lexical_outside(rel):
+    """True when a config path cannot stay inside the project root, judged from the text alone (nothing is touched, so a
+    UNC path never makes the OS contact another machine): absolute, rooted, drive/UNC, '..' segments, NUL."""
+    if not isinstance(rel, str):
+        raise TypeError("paths in the config must be strings")
+    if "\x00" in rel or rel.startswith(("/", "\\")) or os.path.isabs(rel) or os.path.splitdrive(rel)[0]:
+        return True
+    return ".." in re.split(r"[\\/]+", rel)
+
+
+def is_link(p):
+    """True for a symlink or a directory junction. A Windows reparse point that is not a link (a cloud placeholder) is ordinary."""
+    try:
+        st = os.lstat(p)
+    except (OSError, ValueError):
+        return False
+    if stat.S_ISLNK(st.st_mode):
+        return True
+    if getattr(st, "st_file_attributes", 0) & 0x400:
+        try:
+            os.readlink(p)
+            return True
+        except (OSError, ValueError):
+            return False
+    return False
+
+
+class ScanLimit(Exception):
+    pass
+
+
+def _has_magic(seg):
+    return re.search(r"[*?\[]", seg) is not None
+
+
+def walk_glob(base, pattern, deadline, max_scan):
+    """Yield paths below `base` matching a relative glob (`*`, `?`, `[..]`, `**`), like glob.glob(recursive=True) except:
+    symlinks and junctions are never followed (a matching link is still yielded, but never entered), and every directory
+    entry visited counts against `max_scan` and the `deadline` even when nothing matches (ScanLimit). Names starting with
+    '.' are matched only by a pattern that starts with '.', and `**` skips them, as glob does."""
+    segs = [x for x in re.split(r"[\\/]+", pattern) if x]
+    want_dir = bool(pattern) and pattern[-1] in "/\\"
+    state = {"n": 0}
+
+    def tick():
+        state["n"] += 1
+        if state["n"] > max_scan or _now() > deadline:
+            raise ScanLimit()
+
+    def entries(d):
+        try:
+            with os.scandir(d) as it:
+                for e in it:
+                    tick()
+                    yield e
+        except (OSError, ValueError):
+            return
+
+    def descend_ok(path):
+        return os.path.isdir(path) and not is_link(path)
+
+    def rec(d, i):
+        if i == len(segs):
+            if not want_dir or os.path.isdir(d):
+                yield d
+            return
+        seg = segs[i]
+        last = i == len(segs) - 1
+        if seg == "**":
+            if not last:
+                yield from rec(d, i + 1)
+            for e in entries(d):
+                if e.name.startswith("."):
+                    continue
+                if last:
+                    if not want_dir or e.is_dir():
+                        yield e.path
+                if e.is_dir(follow_symlinks=False) and not is_link(e.path):
+                    yield from rec(e.path, i)
+        elif _has_magic(seg):
+            for e in entries(d):
+                if e.name.startswith(".") and not seg.startswith("."):
+                    continue
+                if not fnmatch.fnmatch(e.name, seg):
+                    continue
+                if last:
+                    yield from rec(e.path, i + 1)
+                elif e.is_dir(follow_symlinks=False) and not is_link(e.path):
+                    yield from rec(e.path, i + 1)
+        else:
+            nxt = os.path.join(d, seg)
+            if last:
+                if os.path.lexists(nxt):
+                    yield from rec(nxt, i + 1)
+            elif descend_ok(nxt):
+                yield from rec(nxt, i + 1)
+
+    if not os.path.isdir(base):
+        return
+    yield from rec(base, 0)
 
 
 def run(root, config_path=None, today=None):
@@ -58,7 +183,7 @@ def run(root, config_path=None, today=None):
     if not isinstance(cfg, dict):
         raise TypeError("config must be a JSON object")
     out = []
-    deadline = time.time() + MAX_SECONDS
+    deadline = _now() + MAX_SECONDS
     Rr = os.path.realpath(R)
 
     def inside(p):
@@ -68,7 +193,10 @@ def run(root, config_path=None, today=None):
             return False
 
     def J(rel):
-        """Join a config path to the root; None when it would leave the project root."""
+        """Join a config path to the root; None when it would leave the project root (judged from the text first, so an absolute
+        or UNC path is never even looked up, then by real path so links that lead out are caught)."""
+        if lexical_outside(rel):
+            return None
         p = os.path.join(R, rel)
         return p if inside(p) else None
 
@@ -83,20 +211,38 @@ def run(root, config_path=None, today=None):
         out.append((level, name, ev))
 
     def g(p):
+        if lexical_outside(p):
+            add("FAIL", "glob " + clean(p), "outside the project root")
+            return []
         if p.count("**") > 2:
             add("FAIL", "glob " + clean(p), "too many ** segments (limit 2)")
             return []
-        res = []
+        res, seen = [], set()
         try:
-            for x in glob.iglob(os.path.join(glob.escape(R), p), recursive=True):
-                if len(res) >= MAX_FILES or time.time() > deadline:
+            for x in walk_glob(R, p, deadline, MAX_FILES * SCAN_FACTOR):
+                if x in seen:
+                    continue
+                seen.add(x)
+                if len(res) >= MAX_FILES:
                     add("FAIL", "glob " + clean(p), "scan limit reached (%d files / %d s); narrow the pattern" % (MAX_FILES, MAX_SECONDS))
                     break
                 if inside(x):
                     res.append(x)
+        except ScanLimit:
+            add("FAIL", "glob " + clean(p), "scan limit reached (%d entries / %d s); narrow the pattern" % (MAX_FILES * SCAN_FACTOR, MAX_SECONDS))
         except OSError as e:
             add("FAIL", "glob " + clean(p), "cannot scan: %s" % clean(e))
         return res
+
+    def first_match(base, pattern):
+        """(found, limit_hit): does a relative pattern match anything below base, with the same bounds as g()."""
+        try:
+            for x in walk_glob(base, pattern, deadline, MAX_FILES * SCAN_FACTOR):
+                if inside(x):
+                    return True, False
+            return False, False
+        except ScanLimit:
+            return False, True
 
     def mt(p):
         try:
@@ -114,17 +260,36 @@ def run(root, config_path=None, today=None):
     ep = cfg.get("items") or cfg.get("episodes")
     if ep:
         man = ""
-        mp = J(ep.get("manifest", ""))
-        if ep.get("manifest") and mp and os.path.isfile(mp):
-            with open(mp, encoding="utf-8-sig", errors="replace") as fh:
-                man = fh.read()
+        mname = ep.get("manifest")
+        if mname:
+            mp = J(mname)
+            if mp is None:
+                add("FAIL", "manifest " + clean(mname), "outside the project root")
+            elif os.path.isfile(mp):
+                with open(mp, encoding="utf-8-sig", errors="replace") as fh:
+                    man = fh.read(5000000)
         dirs = sorted(x for x in g(ep["glob"]) if os.path.isdir(x) and not os.path.basename(x).startswith("_"))
         if not dirs:
-            add("WARN", "items " + ep["glob"], "no matching folders")
+            add("WARN", "items " + clean(ep["glob"]), "no matching folders")
         for d in dirs:
             n = os.path.basename(d)
-            miss = [r for r in lst(ep.get("require"), "require") if not glob.glob(os.path.join(glob.escape(d), r))]
-            add("PASS" if not miss else "FAIL", "item " + clean(n), ("missing: " + clean(", ".join(miss))) if miss else "files ok")
+            miss, outside, limit = [], [], False
+            for r in lst(ep.get("require"), "require"):
+                if lexical_outside(r):
+                    outside.append(r)
+                    continue
+                found, hit = first_match(d, r)
+                limit = limit or hit
+                if not found and not hit:
+                    miss.append(r)
+            problems = []
+            if miss:
+                problems.append("missing: " + clean(", ".join(miss)))
+            if outside:
+                problems.append("outside the project root: " + clean(", ".join(outside)))
+            if limit:
+                problems.append("scan limit reached (%d entries / %d s)" % (MAX_FILES * SCAN_FACTOR, MAX_SECONDS))
+            add("FAIL" if problems else "PASS", "item " + clean(n), "; ".join(problems) if problems else "files ok")
             if man:
                 add("PASS" if re.search(r"(?<!\w)" + re.escape(n) + r"(?!\w)", man) else "WARN", "manifest mentions " + clean(n))
 
@@ -161,7 +326,13 @@ def run(root, config_path=None, today=None):
 
     sf = cfg.get("state_fresh")
     if sf:
-        state = [J(x) for x in lst(sf["state"], "state") if J(x) and os.path.isfile(J(x))]
+        state = []
+        for x in lst(sf["state"], "state"):
+            sp = J(x)
+            if sp is None:
+                add("FAIL", "state file " + clean(x), "outside the project root")
+            elif os.path.isfile(sp):
+                state.append(sp)
         work = [w for p in lst(sf["work"], "work") for w in g(p) if os.path.isfile(w) and "_archive" not in os.path.relpath(w, R).lower()]
         if state and work:
             oldest_state = min(mt(s) for s in state)
@@ -180,21 +351,31 @@ def run(root, config_path=None, today=None):
             add("WARN", label, "no files")
             continue
         age = (dt.datetime.now().timestamp() - max(mt(f) for f in fs)) / 86400
-        add("PASS" if age <= n["max_days"] else "WARN", label, "newest %.1f d old (max %s)" % (age, n["max_days"]))
+        add("PASS" if age <= n["max_days"] else "WARN", label, "newest %.1f d old (max %s)" % (age, clean(n["max_days"], 20)))
 
-    for s in cfg.get("sync", []):
-        label = clean(s.get("label", s["target"]))
-        t = J(s["target"])
-        if not t or not os.path.isfile(t):
+    for sy in cfg.get("sync", []):
+        label = clean(sy.get("label", sy["target"]))
+        t = J(sy["target"])
+        if t is None:
+            add("FAIL", label, "target outside the project root")
+            continue
+        if not os.path.isfile(t):
             add("WARN", label, "target missing")
             continue
-        newer = [x for x in lst(s["sources"], "sources") if J(x) and os.path.isfile(J(x)) and mt(J(x)) > mt(t) + 60]
+        newer = []
+        for x in lst(sy["sources"], "sources"):
+            xp = J(x)
+            if xp is None:
+                add("FAIL", label, "source outside the project root: " + clean(x))
+            elif os.path.isfile(xp) and mt(xp) > mt(t) + 60:
+                newer.append(x)
         add("WARN" if newer else "PASS", label, ("sources newer than target: " + clean(", ".join(newer))) if newer else "in sync")
 
     fails = sum(1 for l, _, _ in out if l == "FAIL")
     warns = sum(1 for l, _, _ in out if l == "WARN")
     head = "# vitals %s - %s - FAIL %d / WARN %d / total %d" % (clean(os.path.basename(R)), today, fails, warns, len(out))
-    lines = [head] + ["[%s] %s" % (l, n) + (": " + e if e else "") for l, n, e in out]
+    # last line of defence: whatever was echoed, one result is exactly one line that starts with its own level tag
+    lines = [head] + ["[%s] %s" % (l, clean(n, 300)) + (": " + clean(e, 500) if e else "") for l, n, e in out]
     return lines, fails, warns
 
 
@@ -250,6 +431,65 @@ def init_config(root, write=False):
     return 0, "created %s\n%s%s" % (target, text, note if "state_fresh" in cfg else "")
 
 
+def _path_has_link(p):
+    """True when any existing component of the absolute path `p` is a symlink or junction."""
+    drive, rest = os.path.splitdrive(p)
+    cur = drive + os.sep if (drive or p.startswith(os.sep)) else ""
+    for part in [x for x in re.split(r"[\\/]+", rest) if x]:
+        cur = os.path.join(cur, part) if cur else part
+        if os.path.lexists(cur) and is_link(cur):
+            return True
+    return False
+
+
+def _is_previous_report(path):
+    """True only for a regular file that looks exactly like one of our reports: first line starts with '# vitals ', at most
+    REPORT_MAX_LINES lines, every line empty or starting with [PASS], [WARN], [FAIL] or '#'."""
+    count = 0
+    try:
+        with open(path, encoding="utf-8-sig") as fh:
+            while True:
+                line = fh.readline(REPORT_MAX_LINE_CHARS + 1)
+                if not line:
+                    break
+                count += 1
+                if count > REPORT_MAX_LINES or len(line) > REPORT_MAX_LINE_CHARS:
+                    return False
+                body = line.rstrip("\r\n")
+                if count == 1 and not body.startswith("# vitals "):
+                    return False
+                if body and not body.startswith(_REPORT_PREFIXES):
+                    return False
+    except (OSError, UnicodeDecodeError, ValueError):
+        return False
+    return count >= 1
+
+
+def report_error(report, config_path):
+    """None when `report` may be written; otherwise the message to print. Refuses: a path that goes through a link, the config
+    (or anything named like it, or an alternate stream of it), and any existing file that is not a previous vitals report."""
+    rp = os.path.abspath(report)
+    if os.name == "nt" and ":" in os.path.basename(rp):
+        return "refusing to write %s: a ':' in the file name (alternate data stream) is not allowed" % rp
+    n_rp, n_cfg = os.path.normcase(rp), os.path.normcase(os.path.abspath(config_path))
+    named_like_config = os.path.basename(n_rp).startswith("inventory.config.json")
+    if n_rp == n_cfg or n_rp.startswith((n_cfg + os.sep, n_cfg + "/", n_cfg + ":")) or named_like_config:
+        return "refusing to write %s: it is (or is named like) the project's config file" % rp
+    if _path_has_link(rp):
+        return "refusing to write %s: the path goes through a link (symlink or junction)" % rp
+    if os.path.lexists(rp):
+        if not os.path.isfile(rp):
+            return "refusing to overwrite %s: it is not a regular file" % rp
+        try:
+            if os.path.exists(config_path) and os.path.samefile(rp, config_path):
+                return "refusing to write %s: it is the project's config file" % rp
+        except OSError:
+            pass
+        if not _is_previous_report(rp):
+            return "refusing to overwrite %s: it is not a previous vitals report (choose a new file name)" % rp
+    return None
+
+
 def main(argv=None):
     class _Parser(argparse.ArgumentParser):
         def error(self, message):  # usage errors exit 1: exit code 2 is reserved for FAIL findings
@@ -282,24 +522,27 @@ def main(argv=None):
         else:
             print("a file disappeared during the run: %s (run again)" % e.filename, file=sys.stderr)
         return 1
-    except (ValueError, KeyError, TypeError, AttributeError) as e:
-        print("invalid config or data (%s: %s)" % (type(e).__name__, e), file=sys.stderr)
+    except (ValueError, KeyError, TypeError, AttributeError, RecursionError) as e:
+        print("invalid config or data (%s: %s)" % (type(e).__name__, clean(e, 200)), file=sys.stderr)
+        return 1
+    except OSError as e:
+        print("cannot read the config or a project file: %s" % clean(e, 200), file=sys.stderr)
         return 1
     txt = "\n".join(lines)
     print(txt)
     if a.report:
+        cfgp = os.path.abspath(a.config) if a.config else os.path.join(os.path.abspath(a.root), DEFAULT_CONFIG)
+        err = report_error(a.report, cfgp)
+        if err:
+            print(err, file=sys.stderr)
+            return 1
         rp = os.path.abspath(a.report)
-        if os.path.lexists(rp):
-            try:
-                with open(rp, encoding="utf-8-sig") as fh:
-                    first = fh.readline()
-            except (OSError, UnicodeDecodeError):
-                first = ""
-            if not first.startswith("# vitals "):
-                print("refusing to overwrite %s: it is not a previous vitals report (choose a new file name)" % rp, file=sys.stderr)
-                return 1
-        with open(rp, "w", encoding="utf-8") as fh:
-            fh.write(txt + "\n")
+        try:
+            with open(rp, "w", encoding="utf-8") as fh:
+                fh.write(txt + "\n")
+        except OSError as e:
+            print("cannot write the report %s: %s" % (rp, clean(e, 200)), file=sys.stderr)
+            return 1
     return 2 if fails else 0
 
 

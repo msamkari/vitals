@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.3 (2026-11-15)
+Round-2 adversarial findings, fixed here:
+- Root confinement for every config path: `items.require`, `items.manifest`, `state_fresh` state files, `sync` targets and sources and every glob are judged from their text first (absolute, rooted, UNC, drive-letter, `..`, NUL) and reported as `FAIL ... outside the project root`; such a path is never looked up, so there is no existence oracle and a UNC entry cannot make the OS contact another host. Silent skips of outside entries became FAILs.
+- Bounded traversal: globs are matched by an own `os.scandir` walker (same results as `glob` on plain trees, checked by a test; `*`, `?`, `[..]`, `**`, hidden-name and case rules as before) that never follows symlinks or junctions and counts every entry against a cap (20000 x 10) and the 30 s deadline, so a pattern that matches nothing is bounded too. `require` patterns use the same walker. Behaviour change: `**` in `require` now recurses (it used to act like `*`), and a symlinked folder is no longer entered by a glob.
+- Output hygiene: `clean()` now removes every character of Unicode categories Cc, Cf, Zl, Zp, Cs and Co (line breaks and tabs become one space), collapses whitespace, and is applied to everything echoed from config or files (glob strings, labels, names, `max_days`, error text); a final pass makes sure one result is one line, so a glob containing newlines cannot forge a `[PASS]` line.
+- `--report`: refuses to overwrite any file unless its first line starts with `# vitals ` and it has at most 10000 lines, each empty or starting with `[PASS]`, `[WARN]`, `[FAIL]` or `#` (lines over 5000 characters count as foreign); refuses the config file, anything named `inventory.config.json...`, a hard link to the config, any path that goes through a symlink or junction, and on Windows a `:` in the file name; a missing folder or an unwritable target gives one clear line instead of a traceback. A `--config` that is a directory or a 200000-deep JSON also gives one line.
+- Tests: 27 -> 49.
+- Known limits: a race between the report check and the write is not closed; a very large tree can use most of the 30 s; macOS `/tmp` and any folder reached through a link cannot be a report target; Windows 8.3 short names and `readme.md.` / `nul` quirks (round-2 V6) are unchanged; wrong-typed config values still abort the whole run with one line (V7); Python 3.8 is covered by syntax and CI only, not run locally.
+
 ## 0.2.2 (2026-11-15)
 - Added the plugin icon (square PNG, 1024 px), generated with Gemini and chosen by the author; clears the ICON_MISSING validator warning.
 

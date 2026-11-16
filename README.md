@@ -53,7 +53,7 @@ Fix findings by updating the stale files, never by editing the config to hide th
 
 ## Safety
 
-Never executes project files, never opens network connections, never writes anything except the optional `--report` file and, on explicit `--init --write`, a new config file that it never overwrites. It stores no credentials. Config paths are trusted input: use relative paths inside the project root.
+Never executes project files, never opens network connections, never writes anything except the optional `--report` file and, on explicit `--init --write`, a new config file that it never overwrites. It stores no credentials. Config paths are checked, not trusted: every path (required files, item requirements, manifest, state, sync, globs) must stay inside the project root; absolute, UNC, drive-letter and `..` paths are reported as FAIL (`outside the project root`) without being looked up. Globs are matched by a bounded walker that never enters symlinks or junctions and stops at 200000 entries or 30 s even when nothing matches (known limit: a very large tree can still use most of those 30 s). All text echoed from the config or from project files has control, format, line-separator, surrogate and private-use characters removed. `--report` overwrites only a file that is exactly a previous vitals report (first line `# vitals `, at most 10000 lines, every line empty or starting with `[PASS]`, `[WARN]`, `[FAIL]` or `#`); it refuses the config file and anything named like it, a path that goes through a symlink or junction anywhere (so a project reached through a linked folder cannot be reported into), and, on Windows, file names containing `:`. A race between the check and the write is not closed.
 
 ## Tests
 
